@@ -11,8 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from datetime import datetime
 
-from .parser import KunUzParser
-from .config import CATEGORIES
+from parser import KunUzParser
+from config import CATEGORIES
 
 app = FastAPI(
     title="KunUz Parser API",

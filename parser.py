@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 from pathlib import Path
 import json
 
-from .config import CATEGORIES, BASE_URL, OUTPUT_DIR
+from config import CATEGORIES, BASE_URL, OUTPUT_DIR
 
 
 FOOTER_RE = re.compile(
