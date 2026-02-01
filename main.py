@@ -1,11 +1,8 @@
 """
 KunUz Parser — FastAPI API
-Endpoints:
-  GET  /categories          -> список категорий
-  GET  /parse               -> парсинг (query params)
-  GET  /health              -> healthcheck для Render
 """
 
+import logging
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
@@ -13,6 +10,9 @@ from datetime import datetime
 
 from parser import KunUzParser
 from config import CATEGORIES
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="KunUz Parser API",
@@ -28,56 +28,41 @@ app.add_middleware(
 )
 
 
-# ─── healthcheck (Render ping) ───────────────────────────────────────────────
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-# ─── список категорий ────────────────────────────────────────────────────────
 @app.get("/categories")
 def categories():
     return {
-        key: {
-            "url": val["url"],
-            "category_name": val["category_name"],
-        }
+        key: {"url": val["url"], "category_name": val["category_name"]}
         for key, val in CATEGORIES.items()
     }
 
 
-# ─── парсинг ─────────────────────────────────────────────────────────────────
-# def (не async def) — FastAPI сам крутит это в threadpool,
-# Playwright sync API работает нормально без конфликта с event loop
 @app.get("/parse")
 def parse(
-    category: str = Query(default="everything", description="Категория или 'everything'"),
-    limit: int = Query(default=20, ge=1, le=100, description="Кол-во новостей (макс 100)"),
-    from_date: Optional[str] = Query(default=None, description="Дата начала YYYY-MM-DD"),
-    to_date: Optional[str] = Query(default=None, description="Дата окончания YYYY-MM-DD"),
+    category: str = Query(default="everything"),
+    limit: int = Query(default=20, ge=1, le=100),
+    from_date: Optional[str] = Query(default=None),
+    to_date: Optional[str] = Query(default=None),
 ):
-    # валидация категории
     valid_categories = list(CATEGORIES.keys()) + ["everything"]
     if category not in valid_categories:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Неизвестная категория '{category}'. Доступные: {valid_categories}"
-        )
+        raise HTTPException(400, detail=f"Неизвестная категория '{category}'. Доступные: {valid_categories}")
 
-    # валидация дат
     for label, val in [("from_date", from_date), ("to_date", to_date)]:
         if val:
             try:
                 datetime.strptime(val, "%Y-%m-%d")
             except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Неверный формат '{label}': {val}. Ожидается YYYY-MM-DD"
-                )
+                raise HTTPException(400, detail=f"Неверный формат '{label}': {val}. Ожидается YYYY-MM-DD")
 
-    # запускаем парсер (sync, в threadpool от FastAPI)
+    logger.info(f"[PARSE] START category={category} limit={limit}")
     try:
         parser = KunUzParser()
+        logger.info("[PARSE] KunUzParser created, calling parse()...")
         results = parser.parse(
             category=category,
             limit=limit,
@@ -86,12 +71,9 @@ def parse(
             save=False,
             verbose=True,
         )
+        logger.info(f"[PARSE] DONE, got {len(results)} results")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"[PARSE] ERROR: {e}", exc_info=True)
+        raise HTTPException(500, detail=str(e))
 
-    return {
-        "count": len(results),
-        "category": category,
-        "limit": limit,
-        "data": results,
-    }
+    return {"count": len(results), "category": category, "limit": limit, "data": results}

@@ -226,7 +226,18 @@ class KunUzParser:
         all_results = []
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-extensions",
+                ]
+            )
             page = browser.new_page()
 
             # Everything - собираем со всех категорий
