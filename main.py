@@ -6,10 +6,12 @@ Endpoints:
   GET  /health              -> healthcheck для Render
 """
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
 
 from parser import KunUzParser
 from config import CATEGORIES
@@ -26,6 +28,23 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+# Отдельный executor — Playwright запускается в своём процессе,
+# иначе sync_playwright конфликтует с asyncio event loop FastAPI
+executor = ProcessPoolExecutor(max_workers=2)
+
+
+# ─── запускаем парсер в отдельном процессе ───────────────────────────────────
+def _run_parser(category: str, limit: int, from_date, to_date):
+    parser = KunUzParser()
+    return parser.parse(
+        category=category,
+        limit=limit,
+        from_date=from_date,
+        to_date=to_date,
+        save=False,
+        verbose=True,
+    )
 
 
 # ─── healthcheck (Render ping) ───────────────────────────────────────────────
@@ -57,7 +76,6 @@ async def parse(
     # валидация категории
     valid_categories = list(CATEGORIES.keys()) + ["everything"]
     if category not in valid_categories:
-        from fastapi import HTTPException
         raise HTTPException(
             status_code=400,
             detail=f"Неизвестная категория '{category}'. Доступные: {valid_categories}"
@@ -69,20 +87,20 @@ async def parse(
             try:
                 datetime.strptime(val, "%Y-%m-%d")
             except ValueError:
-                from fastapi import HTTPException
                 raise HTTPException(
                     status_code=400,
                     detail=f"Неверный формат '{label}': {val}. Ожидается YYYY-MM-DD"
                 )
 
-    parser = KunUzParser()
-    results = parser.parse(
-        category=category,
-        limit=limit,
-        from_date=from_date,
-        to_date=to_date,
-        save=False,       # на сервере не сохраняем в файл
-        verbose=True,
+    # запускаем парсер в отдельном процессе (не блокируем event loop)
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(
+        executor,
+        _run_parser,
+        category,
+        limit,
+        from_date,
+        to_date,
     )
 
     return {
