@@ -10,8 +10,6 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from datetime import datetime
-import asyncio
-from concurrent.futures import ProcessPoolExecutor
 
 from parser import KunUzParser
 from config import CATEGORIES
@@ -29,33 +27,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Отдельный executor — Playwright запускается в своём процессе,
-# иначе sync_playwright конфликтует с asyncio event loop FastAPI
-executor = ProcessPoolExecutor(max_workers=2)
-
-
-# ─── запускаем парсер в отдельном процессе ───────────────────────────────────
-def _run_parser(category: str, limit: int, from_date, to_date):
-    parser = KunUzParser()
-    return parser.parse(
-        category=category,
-        limit=limit,
-        from_date=from_date,
-        to_date=to_date,
-        save=False,
-        verbose=True,
-    )
-
 
 # ─── healthcheck (Render ping) ───────────────────────────────────────────────
 @app.get("/health")
-async def health():
+def health():
     return {"status": "ok"}
 
 
 # ─── список категорий ────────────────────────────────────────────────────────
 @app.get("/categories")
-async def categories():
+def categories():
     return {
         key: {
             "url": val["url"],
@@ -66,8 +47,10 @@ async def categories():
 
 
 # ─── парсинг ─────────────────────────────────────────────────────────────────
+# def (не async def) — FastAPI сам крутит это в threadpool,
+# Playwright sync API работает нормально без конфликта с event loop
 @app.get("/parse")
-async def parse(
+def parse(
     category: str = Query(default="everything", description="Категория или 'everything'"),
     limit: int = Query(default=20, ge=1, le=100, description="Кол-во новостей (макс 100)"),
     from_date: Optional[str] = Query(default=None, description="Дата начала YYYY-MM-DD"),
@@ -92,16 +75,19 @@ async def parse(
                     detail=f"Неверный формат '{label}': {val}. Ожидается YYYY-MM-DD"
                 )
 
-    # запускаем парсер в отдельном процессе (не блокируем event loop)
-    loop = asyncio.get_event_loop()
-    results = await loop.run_in_executor(
-        executor,
-        _run_parser,
-        category,
-        limit,
-        from_date,
-        to_date,
-    )
+    # запускаем парсер (sync, в threadpool от FastAPI)
+    try:
+        parser = KunUzParser()
+        results = parser.parse(
+            category=category,
+            limit=limit,
+            from_date=from_date,
+            to_date=to_date,
+            save=False,
+            verbose=True,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "count": len(results),
